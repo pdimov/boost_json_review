@@ -157,8 +157,6 @@ static void ensure( std::size_t n, unsigned char const * first, unsigned char co
     if( last - first < n ) throw_eof_error();
 }
 
-unsigned char const * parse_cbor_value( unsigned char const * first, unsigned char const * last, boost::json::value & v );
-
 static unsigned char const * parse_cbor_number( unsigned char const * first, unsigned char const * last, unsigned char ch, std::uint64_t & n )
 {
     unsigned char cv = ch & 31;
@@ -203,7 +201,7 @@ static unsigned char const * parse_cbor_number( unsigned char const * first, uns
     return first;
 }
 
-static unsigned char const * parse_cbor_string( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_string( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
@@ -213,35 +211,30 @@ static unsigned char const * parse_cbor_string( unsigned char const * first, uns
     boost::json::string_view sv( reinterpret_cast<char const*>( first ), n );
     first += n;
 
-    v = sv;
+    st.push_string( sv );
     return first;
 }
 
-static unsigned char const * parse_cbor_array( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_value_( unsigned char const * first, unsigned char const * last, boost::json::value_stack & st );
+
+static unsigned char const * parse_cbor_array( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
-
-    boost::json::array & a = v.emplace_array();
-
-    a.resize( n );
 
     for( std::size_t i = 0; i < n; ++i )
     {
-        first = parse_cbor_value( first, last, a[ i ] );
+        first = parse_cbor_value_( first, last, st );
     }
 
+    st.push_array( n );
     return first;
 }
 
-static unsigned char const * parse_cbor_object( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_object( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
-
-    boost::json::object & o = v.emplace_object();
-
-    o.reserve( n );
 
     for( std::size_t i = 0; i < n; ++i )
     {
@@ -263,62 +256,62 @@ static unsigned char const * parse_cbor_object( unsigned char const * first, uns
         boost::json::string_view sv( reinterpret_cast<char const*>( first ), m );
         first += m;
 
+        st.push_key( sv );
+
         // value
 
-        boost::json::value w( v.storage() );
-        first = parse_cbor_value( first, last, w );
-
-        o.insert( boost::json::key_value_pair( sv, std::move( w ) ) );
+        first = parse_cbor_value_( first, last, st );
     }
 
+    st.push_object( n );
     return first;
 }
 
-static unsigned char const * parse_cbor_unsigned( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_unsigned( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
 
-    v = n;
+    st.push_uint64( n );
     return first;
 }
 
-static unsigned char const * parse_cbor_signed( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_signed( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
 
-    v = static_cast<std::int64_t>( ~n );
+    st.push_int64( ~n );
     return first;
 }
 
-static unsigned char const * parse_cbor_semantic_tag( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_semantic_tag( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
 
     // ignore semantic tags
 
-    return parse_cbor_value( first, last, v );
+    return parse_cbor_value_( first, last, st );
 }
 
-static unsigned char const * parse_cbor_type7( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value & v )
+static unsigned char const * parse_cbor_type7( unsigned char const * first, unsigned char const * last, unsigned char ch, boost::json::value_stack & st )
 {
     switch( ch & 31 )
     {
     case 20:
 
-        v = false;
+        st.push_bool( false );
         return first;
 
     case 21:
 
-        v = true;
+        st.push_bool( true );
         return first;
 
     case 22:
 
-        v = nullptr;
+        st.push_null();
         return first;
 
     case 26: // float
@@ -328,7 +321,7 @@ static unsigned char const * parse_cbor_type7( unsigned char const * first, unsi
         float w = boost::endian::endian_load<float, 4, boost::endian::order::big>( first );
         first += 4;
 
-        v = w;
+        st.push_double( w );
         return first;
     }
 
@@ -339,7 +332,7 @@ static unsigned char const * parse_cbor_type7( unsigned char const * first, unsi
         double w = boost::endian::endian_load<double, 8, boost::endian::order::big>( first );
         first += 8;
 
-        v = w;
+        st.push_double( w );
         return first;
     }
 
@@ -349,7 +342,7 @@ static unsigned char const * parse_cbor_type7( unsigned char const * first, unsi
     }
 }
 
-unsigned char const * parse_cbor_value( unsigned char const * first, unsigned char const * last, boost::json::value & v )
+static unsigned char const * parse_cbor_value_( unsigned char const * first, unsigned char const * last, boost::json::value_stack & st )
 {
     ensure( 1, first, last );
     unsigned char ch = *first++;
@@ -358,11 +351,11 @@ unsigned char const * parse_cbor_value( unsigned char const * first, unsigned ch
     {
     case 0:
 
-        return parse_cbor_unsigned( first, last, ch, v );
+        return parse_cbor_unsigned( first, last, ch, st );
 
     case 1:
 
-        return parse_cbor_signed( first, last, ch, v );
+        return parse_cbor_signed( first, last, ch, st );
 
     case 2:
 
@@ -370,23 +363,23 @@ unsigned char const * parse_cbor_value( unsigned char const * first, unsigned ch
 
     case 3:
 
-        return parse_cbor_string( first, last, ch, v );
+        return parse_cbor_string( first, last, ch, st );
 
     case 4:
 
-        return parse_cbor_array( first, last, ch, v );
+        return parse_cbor_array( first, last, ch, st );
 
     case 5:
 
-        return parse_cbor_object( first, last, ch, v );
+        return parse_cbor_object( first, last, ch, st );
 
     case 6:
 
-        return parse_cbor_semantic_tag( first, last, ch, v );
+        return parse_cbor_semantic_tag( first, last, ch, st );
 
     case 7:
         
-        return parse_cbor_type7( first, last, ch, v );
+        return parse_cbor_type7( first, last, ch, st );
 
     default:
 #if defined(_MSC_VER)
@@ -395,6 +388,18 @@ unsigned char const * parse_cbor_value( unsigned char const * first, unsigned ch
         __builtin_unreachable();
 #endif
     }
+}
+
+boost::json::value parse_cbor_value( unsigned char const * & first, unsigned char const * last, boost::json::storage_ptr sp = {} )
+{
+    unsigned char buffer[ 2048 ];
+    boost::json::value_stack st( {}, buffer, sizeof( buffer ) );
+
+    st.reset( sp );
+
+    first = parse_cbor_value_( first, last, st );
+
+    return st.release();
 }
 
 #include <fstream>
@@ -420,8 +425,8 @@ void test( char const * fn )
     std::printf( "Serializing %s to CBOR: %llu bytes, %lld us\n", fn, (unsigned long long)out.size(), std::chrono::duration_cast<std::chrono::microseconds>( t4 - t3 ).count() );
 
     auto t5 = std::chrono::high_resolution_clock::now();
-    boost::json::value v2;
-    parse_cbor_value( out.data(), out.data() + out.size(), v2 );
+    unsigned char const * p = out.data();
+    auto const v2 = parse_cbor_value( p, p + out.size() );
     auto t6 = std::chrono::high_resolution_clock::now();
 
     std::printf( "Parsing %s from CBOR: %lld us, %s roundtrip\n", fn, std::chrono::duration_cast<std::chrono::microseconds>( t6 - t5 ).count(), (v == v2? "successful": "UNSUCCESSFUL") );
