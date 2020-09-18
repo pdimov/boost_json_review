@@ -1,5 +1,5 @@
 # Clang-cl 10
-
+```
 Parsing canada.json from JSON: 10548 us
 Serializing canada.json to CBOR: 1056200 bytes, 4840 us
 Parsing canada.json from CBOR: 33941 us, successful roundtrip
@@ -29,3 +29,4 @@ Parsing twitter.json from JSON: 3351 us
 Serializing twitter.json to CBOR: 403918 bytes, 1316 us
 Parsing twitter.json from CBOR: 10907 us, successful roundtrip
 Serializing twitter.json to JSON: 466921 bytes, 1354 us
+```
