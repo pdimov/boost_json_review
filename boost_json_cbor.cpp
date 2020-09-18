@@ -265,10 +265,12 @@ static unsigned char const * parse_cbor_object( unsigned char const * first, uns
 
         // value
 
-        boost::json::value w( v.storage() );
-        first = parse_cbor_value( first, last, w );
+        // boost::json::value w( v.storage() );
+        // first = parse_cbor_value( first, last, w );
+        //
+        // o.insert( boost::json::key_value_pair( sv, std::move( w ) ) );
 
-        o.insert( boost::json::key_value_pair( sv, std::move( w ) ) );
+        first = parse_cbor_value( first, last, o[ sv ] );
     }
 
     return first;
