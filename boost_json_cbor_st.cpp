@@ -222,7 +222,47 @@ static unsigned char const * parse_cbor_array( unsigned char const * first, unsi
     std::uint64_t n;
     first = parse_cbor_number( first, last, ch, n );
 
-    for( std::size_t i = 0; i < n; ++i )
+    std::size_t i = 0;
+
+    for( ; i < n; ++i ) // double[] fast path
+    {
+        ensure( 1, first, last );
+        unsigned char ch2 = *first;
+
+        if( ch2 != 0xFB ) break;
+
+        ++first;
+        ensure( 8, first, last );
+
+        double w = boost::endian::endian_load<double, 8, boost::endian::order::big>( first );
+        first += 8;
+
+        st.push_double( w );
+    }
+
+    for( ; i < n; ++i ) // int[] fast path
+    {
+        ensure( 1, first, last );
+        unsigned char ch2 = *first;
+
+        if( ch2 >= 0x40 ) break;
+
+        ++first;
+
+        std::uint64_t m;
+        first = parse_cbor_number( first, last, ch2, m );
+
+        if( ch2 < 0x20 )
+        {
+            st.push_uint64( m );
+        }
+        else
+        {
+            st.push_int64( ~m );
+        }
+    }
+
+    for( ; i < n; ++i )
     {
         first = parse_cbor_value_( first, last, st );
     }
